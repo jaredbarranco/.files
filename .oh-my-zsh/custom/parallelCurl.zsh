@@ -11,6 +11,6 @@
 # brainstormr=~/Projects/development/planetargon/brainstormr
 # cd $brainstormr
 function parallelCurl() {
-seq 1 200 | xargs -I $ -n1 -P10 curl "$1"
+seq 1 200 | xargs -I $ -n1 -P10 curl "$@"
 }
 
