@@ -60,12 +60,12 @@ function getToken () {
    if test -s "$TOKENFILE"; then
       if [ "$( jq -nr 'now | strftime("%s")|tonumber')" -ge "$( jq -r '.tokenExpires' $TOKENFILE)" ]; then
          echo "Token is not valid - check password and 2FA . . . or the token expired during the run. Please try again"
-         exit
+         exit 1
       fi
    else
       echo "Call to Pleasant Failed - check your network settings or try to access Pleasant from another method"
       echo " . . . Are you connected to VPN?"
-      exit
+      exit 1
    fi
 }
 
