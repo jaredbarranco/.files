@@ -59,11 +59,18 @@ for pkg in bash curl git zsh unzip; do
   install_if_missing "$pkg" "$pkg"
 done
 
-# Optional tools
-install_if_missing "htop" "htop"
-install_if_missing "tmux" "tmux"
-install_if_missing "stow" "stow"
+install_if_missing "rg" "ripgrep"
+install_if_missing "unzip" "unzip"
+install_if_missing "git" "git"
+install_if_missing "xclip" "xclip"
 install_if_missing "nvim" "neovim"
+if [ "$PKG_MGR" = "apk" ]; then
+  install_if_missing "make" "build-base"
+  install_if_missing "gcc" "build-base"
+else
+  install_if_missing "make" "make"
+  install_if_missing "gcc" "gcc"
+fi
 
 # Lazygit install
 install_lazygit() {
@@ -145,4 +152,7 @@ install_docker
 set_default_shell_zsh
 setup_dotfiles
 
+mkdir -p ~/.config/nvim
+cd ~/.config/nvim
+git clone
 info "✅ Bootstrap complete. You may need to reboot or re-login for all changes to apply."
