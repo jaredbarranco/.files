@@ -1,15 +1,15 @@
 #!/bin/sh
 set -e
 
+# Re-run as sudo if not already root
+if [ "$(id -u)" -ne 0 ]; then
+  echo "[INFO] Script not running as root. Re-executing with sudo..."
+  exec sudo "$0" "$@"
+fi
+
 # Colors for logging
 info()  { echo "\033[1;32m[INFO]\033[0m $*"; }
 error() { echo "\033[1;31m[ERROR]\033[0m $*" >&2; }
-
-# Ensure script is run as root
-if [ "$(id -u)" -ne 0 ]; then
-  echo "[ERROR] This script must be run as root (sudo)" >&2
-  exit 1
-fi
 
 # Detect user
 USER_NAME="${SUDO_USER:-$(whoami)}"
@@ -63,9 +63,9 @@ done
 install_if_missing "htop" "htop"
 install_if_missing "tmux" "tmux"
 install_if_missing "stow" "stow"
-install_if_missing "nvim" "neovim"  # `neovim` may be `nvim` in command
+install_if_missing "nvim" "neovim"
 
-# Lazygit install (binary)
+# Lazygit install
 install_lazygit() {
   if ! command -v lazygit > /dev/null; then
     info "Installing lazygit"
@@ -79,7 +79,7 @@ install_lazygit() {
   fi
 }
 
-# GitHub CLI install (APT and RPM-based for now)
+# GitHub CLI install
 install_gh() {
   if command -v gh > /dev/null; then
     info "GitHub CLI already installed"
@@ -104,7 +104,7 @@ install_gh() {
   esac
 }
 
-# Docker install (curl script)
+# Docker install
 install_docker() {
   if ! command -v docker > /dev/null; then
     info "Installing Docker"
@@ -115,7 +115,7 @@ install_docker() {
   fi
 }
 
-# Zsh as default shell
+# Set Zsh as default shell
 set_default_shell_zsh() {
   if command -v zsh > /dev/null && [ "$(getent passwd "$USER_NAME" | cut -d: -f7)" != "$(command -v zsh)" ]; then
     info "Setting zsh as default shell for $USER_NAME"
@@ -123,7 +123,7 @@ set_default_shell_zsh() {
   fi
 }
 
-# Dotfiles
+# Dotfiles setup
 setup_dotfiles() {
   DOTFILES_REPO="https://github.com/jaredbarranco/.files"
   DOTFILES_DIR="$USER_HOME/.files"
@@ -138,7 +138,7 @@ setup_dotfiles() {
   fi
 }
 
-# Execute all steps
+# Run everything
 install_lazygit
 install_gh
 install_docker
@@ -146,4 +146,3 @@ set_default_shell_zsh
 setup_dotfiles
 
 info "✅ Bootstrap complete. You may need to reboot or re-login for all changes to apply."
-
