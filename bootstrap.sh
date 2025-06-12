@@ -152,7 +152,6 @@ install_docker
 set_default_shell_zsh
 setup_dotfiles
 
-mkdir -p ~/.config/nvim
-cd ~/.config/nvim
-git clone
+git clone https://github.com/jaredbarranco/kickstart.nvim ~/.config/nvim
+
 info "✅ Bootstrap complete. You may need to reboot or re-login for all changes to apply."
