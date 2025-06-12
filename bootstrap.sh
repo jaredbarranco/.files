@@ -6,8 +6,8 @@ info()  { echo "\033[1;32m[INFO]\033[0m $*"; }
 error() { echo "\033[1;31m[ERROR]\033[0m $*" >&2; }
 
 # Ensure script is run as root
-if [[ $EUID -ne 0 ]]; then
-  error "This script must be run as root (sudo)"
+if [ "$(id -u)" -ne 0 ]; then
+  echo "[ERROR] This script must be run as root (sudo)" >&2
   exit 1
 fi
 
