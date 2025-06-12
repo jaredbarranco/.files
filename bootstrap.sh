@@ -5,6 +5,12 @@ set -e
 info()  { echo "\033[1;32m[INFO]\033[0m $*"; }
 error() { echo "\033[1;31m[ERROR]\033[0m $*" >&2; }
 
+# Ensure script is run as root
+if [[ $EUID -ne 0 ]]; then
+  error "This script must be run as root (sudo)"
+  exit 1
+fi
+
 # Detect user
 USER_NAME="${SUDO_USER:-$(whoami)}"
 USER_HOME="$(eval echo ~"$USER_NAME")"
