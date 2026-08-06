@@ -19,7 +19,7 @@ fi
 short_hash=$(git log -1 --pretty=format:%h)
 
 # Get the base branch from the input parameter or default to "develop"
-base_branch=${1:-develop}
+base_branch=${1:-development}
 
 # Push changes to origin
 git push origin "${current_branch}"

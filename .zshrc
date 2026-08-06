@@ -100,7 +100,8 @@ fi
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias dg-open='open -a "DataGrip.app"'
-
+alias lg='lazygit'
+alias gc='gcloud'
 
 # Load Angular CLI autocompletion.
 source <(ng completion script)
@@ -130,3 +131,10 @@ export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
 
 # opencode
 export PATH="$HOME/.opencode/bin:$PATH"
+
+# bun completions
+[ -s "/Users/jared/.bun/_bun" ] && source "/Users/jared/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
