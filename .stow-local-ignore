@@ -1,5 +1,6 @@
 .git
 .*/.DS_Store
 .DS_Store
+bootstrap.sh
 README.md
 readme.md
