@@ -86,6 +86,23 @@ install_lazygit() {
   fi
 }
 
+# Herdr install
+install_herdr() {
+  if ! command -v herdr > /dev/null; then
+    info "Installing herdr"
+    HERDR_VERSION=$(curl -s https://api.github.com/repos/herdrdev/herdr/releases/latest | grep tag_name | cut -d '"' -f4)
+    case "$(uname -m)" in
+      x86_64|amd64) HERDR_ARCH="x86_64" ;;
+      aarch64|arm64) HERDR_ARCH="aarch64" ;;
+      *) error "Unsupported architecture: $(uname -m)"; return ;;
+    esac
+    curl -fLo /usr/local/bin/herdr "https://github.com/herdrdev/herdr/releases/download/${HERDR_VERSION}/herdr-linux-${HERDR_ARCH}"
+    chmod +x /usr/local/bin/herdr
+  else
+    info "herdr already installed"
+  fi
+}
+
 # GitHub CLI install
 install_gh() {
   if command -v gh > /dev/null; then
@@ -147,6 +164,7 @@ setup_dotfiles() {
 
 # Run everything
 install_lazygit
+install_herdr
 install_gh
 install_docker
 set_default_shell_zsh
