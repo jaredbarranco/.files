@@ -100,7 +100,8 @@ fi
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 alias dg-open='open -a "DataGrip.app"'
-
+alias lg='lazygit'
+alias gc='gcloud'
 
 # Load Angular CLI autocompletion.
 source <(ng completion script)
@@ -112,3 +113,28 @@ export NVM_DIR="$HOME/.nvm"
 export PATH="$HOME/go/bin:$PATH"
 export EDITOR=nvim
 export VISUAL=nvim
+
+# Added by Windsurf
+export PATH="/Users/jared/.codeium/windsurf/bin:$PATH"
+
+# PyEnv
+export PYENV_ROOT="$HOME/.pyenv"
+[[ -d $PYENV_ROOT/bin ]] && export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init - zsh)"
+
+
+# Added by Antigravity
+export PATH="/Users/jared/.antigravity/antigravity/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+export PATH="/opt/homebrew/opt/libpq/bin:$PATH"
+
+# opencode
+export PATH="$HOME/.opencode/bin:$PATH"
+
+# bun completions
+[ -s "/Users/jared/.bun/_bun" ] && source "/Users/jared/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
