@@ -134,6 +134,16 @@ install_pkgs stow
 install_pkgs make
 install_pkgs gcc
 
+# node + npm: hosts for LSP servers and the nvim plugins that drive them.
+# The command is `node` on every distro, but the *package* is `nodejs` on
+# debian/alpine and only `node` on fedora/arch, so map the name per manager.
+# Distro packages are fine here -- anything needing a specific node version
+# pins it in that project's own tooling instead.
+case "$PKG_MGR" in
+  apt|apk) install_pkgs node::nodejs npm ;;
+  *)        install_pkgs node npm ;;
+esac
+
 # xclip/xsel are for X11 clipboards. Harmless no-ops headless, so don't fail.
 install_pkgs xclip || warn "xclip unavailable; clipboard integration off"
 
