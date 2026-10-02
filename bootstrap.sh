@@ -128,9 +128,8 @@ install_pkgs gcc
 # xclip/xsel are for X11 clipboards. Harmless no-ops headless, so don't fail.
 install_pkgs xclip || warn "xclip unavailable; clipboard integration off"
 
-# neovim: prefer distro package, but do not hard-fail the whole bootstrap
-# if the distro version is ancient and you want to pin your own.
-install_pkgs nvim::neovim || warn "neovim not installed from packages"
+# neovim: install latest stable from GitHub releases
+install_neovim_github || { error "Failed to install neovim from GitHub releases"; exit 1; }
 
 # ─── github release helper ────────────────────────────────────────────
 latest_version() {
@@ -144,6 +143,7 @@ download_to() {
   # $1 = url, $2 = destination path
   curl -fSL --retry 3 --retry-delay 2 -o "$2" "$1"
 }
+
 
 # ─── lazygit ──────────────────────────────────────────────────────────
 install_lazygit() {
