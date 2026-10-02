@@ -135,6 +135,9 @@ install_pkgs rg::ripgrep
 install_pkgs stow
 install_pkgs make
 install_pkgs gcc
+# tmux: the repo stows a .tmux.conf, and install_tmux_plugins below clones tpm,
+# which the config sources on its last line. Neither works without the binary.
+install_pkgs tmux
 
 # node + npm: hosts for LSP servers and the nvim plugins that drive them.
 # The command is `node` on every distro, but the *package* is `nodejs` on
@@ -320,6 +323,51 @@ install_tree_sitter() {
 
   command -v tree-sitter > /dev/null 2>&1 || \
     warn "tree-sitter not on PATH; nvim-treesitter parser installs will fail"
+}
+
+# Run a command as the owner of the stow target, so anything it writes into
+# that home stays writable by the real user. A root-run step would otherwise
+# leave root-owned files behind, and the first non-root session then cannot
+# update them.
+run_as_owner() {
+  target="${STOW_TARGET:-$HOME}"
+  owner="$(stat -c %U "$target" 2>/dev/null || stat -f %Su "$target" 2>/dev/null || echo "")"
+  if [ "$(id -u)" -eq 0 ] && [ -n "$owner" ] && [ "$owner" != "root" ]; then
+    $SUDO -u "$owner" -H "$@"
+  else
+    "$@"
+  fi
+}
+
+# ─── tmux plugins (tpm) ───────────────────────────────────────────────
+# ~/.tmux.conf ends with `run '~/.tmux/plugins/tpm/tpm'`, so a stowed config
+# without tpm is a config whose plugin manager silently does nothing -- no
+# error, just no vim-tmux-navigator, no resurrect, no continuum.
+install_tmux_plugins() {
+  if ! command -v tmux > /dev/null 2>&1; then
+    skip "tmux not found; not installing tmux plugins"
+    return 0
+  fi
+
+  home="${STOW_TARGET:-$HOME}"
+  tpm_dir="$home/.tmux/plugins/tpm"
+
+  if [ -d "$tpm_dir" ]; then
+    info "tpm already installed"
+  else
+    info "Installing tpm"
+    run_as_owner mkdir -p "$home/.tmux/plugins" || return 0
+    run_as_owner git clone --depth 1 https://github.com/tmux-plugins/tpm "$tpm_dir" || return 0
+  fi
+
+  # tpm installs the @plugin entries when a tmux server starts, which in a
+  # container does not happen until someone attaches. Run its installer
+  # directly -- it needs no server -- so the first real tmux is already
+  # complete. Same reason as the nvim pre-install: nothing is there to answer
+  # a prompt.
+  info "Installing tmux plugins via tpm"
+  run_as_owner "$tpm_dir/bin/install_plugins" ||
+    warn "tpm did not finish cleanly; plugins will install on first tmux launch"
 }
 
 # ─── github cli ───────────────────────────────────────────────────────
@@ -619,6 +667,7 @@ install_tree_sitter
 install_gh
 install_docker
 install_omz
+install_tmux_plugins
 setup_dotfiles
 install_kickstart
 install_nvim_plugins
