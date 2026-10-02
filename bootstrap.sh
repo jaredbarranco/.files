@@ -13,6 +13,7 @@
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
 #   HERDR_VERSION   pin, e.g. v1.2.3
 #   OMZ_VERSION     pin an oh-my-zsh commit
+#   KICKSTART_VERSION pin a kickstart.nvim ref (branch or tag)
 set -eu
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -277,6 +278,37 @@ install_omz() {
   fi
 }
 
+# ─── kickstart.nvim ───────────────────────────────────────────────────
+# kickstart owns all of ~/.config/nvim, so it can only be cloned when the
+# dotfiles repo is not stowing a config of its own into that same path.
+install_kickstart() {
+  target="${STOW_TARGET:-$HOME}/.config/nvim"
+  if [ -f "$target/init.lua" ]; then
+    info "kickstart.nvim already installed"
+    return 0
+  fi
+
+  if [ -L "$target" ]; then
+    warn "$target is a symlink (stowed from the dotfiles repo); skipping"
+    return 0
+  fi
+
+  if [ -e "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null || true)" ]; then
+    warn "$target exists and is not empty; leaving it alone"
+    return 0
+  fi
+
+  info "Installing kickstart.nvim into $target"
+  mkdir -p "$(dirname "$target")"
+  if [ -n "${KICKSTART_VERSION:-}" ]; then
+    git clone --depth 1 --branch "$KICKSTART_VERSION" \
+      https://github.com/jaredbarranco/kickstart.nvim "$target" || return 0
+  else
+    git clone --depth 1 \
+      https://github.com/jaredbarranco/kickstart.nvim "$target" || return 0
+  fi
+}
+
 # ─── dotfiles ─────────────────────────────────────────────────────────
 setup_dotfiles() {
   target="${STOW_TARGET:-$HOME}"
@@ -312,5 +344,6 @@ install_gh
 install_docker
 install_omz
 setup_dotfiles
+install_kickstart
 
 info "Bootstrap complete."

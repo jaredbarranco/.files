@@ -1,2 +1,7 @@
 **/.DS_Store
 .DS_Store
+
+# kickstart.nvim owns ~/.config/nvim. bootstrap.sh clones it there directly and
+# skips when this path is a stow symlink, so keep it untracked: a vendored copy
+# here would shadow the real config and get committed as dotfiles.
+.config/nvim/
