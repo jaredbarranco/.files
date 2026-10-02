@@ -13,6 +13,7 @@
 #   SKIP_SHELL      1 to leave the login shell alone
 #   INSTALL_DOCKER  1 to install docker        (default: 0 in a container)
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
+#   TREE_SITTER_VERSION pin, e.g. v0.27.0      (skips the GitHub API call)
 #   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed from GitHub release)
 #   HERDR_VERSION   pin, e.g. v1.2.3
 #   OMZ_VERSION     pin an oh-my-zsh commit
@@ -273,6 +274,53 @@ install_herdr() {
   rm -rf "$tmp"
 }
 
+# ─── tree-sitter cli ─────────────────────────────────────────────────
+# Not optional: the vim.pack-era nvim-treesitter (nvim-treesitter main)
+# installs parsers by shelling out to the `tree-sitter` CLI rather than
+# building them itself. Without the binary on PATH every parser install fails
+# with "ENOENT: no such file or directory (cmd: 'tree-sitter')" -- which shows
+# up as broken highlighting rather than as an obvious "tool missing" error.
+# Release assets are gzipped single binaries (not tarballs), named with the
+# *Go* arch spelling: x64 / arm64.
+install_tree_sitter() {
+  if command -v tree-sitter > /dev/null 2>&1; then
+    info "tree-sitter already present"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Linux)  ts_os="linux" ;;
+    Darwin) ts_os="macos" ;;
+    *) error "No tree-sitter build for $(uname -s)"; return 0 ;;
+  esac
+
+  case "$ARCH" in
+    x86_64)  ts_arch="x64" ;;
+    aarch64) ts_arch="arm64" ;;
+    *) error "No tree-sitter build for $ARCH"; return 0 ;;
+  esac
+
+  version="${TREE_SITTER_VERSION:-$(latest_version tree-sitter/tree-sitter)}"
+  [ -n "$version" ] || { error "Could not resolve tree-sitter version"; return 0; }
+  version="${version#v}"
+
+  info "Installing tree-sitter $version ($ts_os/$ts_arch)"
+  tmp="$(mktemp -d)"
+  if download_to \
+    "https://github.com/tree-sitter/tree-sitter/releases/download/v${version}/tree-sitter-${ts_os}-${ts_arch}.gz" \
+    "$tmp/tree-sitter.gz"; then
+    gunzip -c "$tmp/tree-sitter.gz" > "$tmp/tree-sitter" &&
+      chmod +x "$tmp/tree-sitter" &&
+      $SUDO install -m 0755 "$tmp/tree-sitter" /usr/local/bin/tree-sitter
+  else
+    error "tree-sitter download failed"
+  fi
+  rm -rf "$tmp"
+
+  command -v tree-sitter > /dev/null 2>&1 || \
+    warn "tree-sitter not on PATH; nvim-treesitter parser installs will fail"
+}
+
 # ─── github cli ───────────────────────────────────────────────────────
 install_gh() {
   if command -v gh > /dev/null 2>&1; then
@@ -506,6 +554,7 @@ install_login_shell() {
 install_login_shell
 install_lazygit
 install_herdr
+install_tree_sitter
 install_gh
 install_docker
 install_omz
