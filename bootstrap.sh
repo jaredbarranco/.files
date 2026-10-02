@@ -11,6 +11,7 @@
 #   STOW_TARGET     home to stow into          (default: $HOME)
 #   INSTALL_DOCKER  1 to install docker        (default: 0 in a container)
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
+#   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed from GitHub release)
 #   HERDR_VERSION   pin, e.g. v1.2.3
 #   OMZ_VERSION     pin an oh-my-zsh commit
 #   KICKSTART_VERSION pin a kickstart.nvim ref (branch or tag)
@@ -128,9 +129,6 @@ install_pkgs gcc
 # xclip/xsel are for X11 clipboards. Harmless no-ops headless, so don't fail.
 install_pkgs xclip || warn "xclip unavailable; clipboard integration off"
 
-# neovim: install latest stable from GitHub releases
-install_neovim_github || { error "Failed to install neovim from GitHub releases"; exit 1; }
-
 # ─── github release helper ────────────────────────────────────────────
 latest_version() {
   # $1 = owner/repo. Returns bare version with no leading v.
@@ -144,6 +142,58 @@ download_to() {
   curl -fSL --retry 3 --retry-delay 2 -o "$2" "$1"
 }
 
+# ─── neovim (github release) ──────────────────────────────────────────
+# Installed from upstream releases, not the distro package: distro neovim on
+# LTS images is frequently too old for the kickstart config (e.g. newer
+# autocmd events and APIs). No package-manager fallback on purpose.
+install_neovim_github() {
+  if command -v nvim > /dev/null 2>&1; then
+    info "nvim already present"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Linux)  nv_os="linux" ;;
+    Darwin) nv_os="macos" ;;
+    *) error "No neovim build for $(uname -s)"; return 1 ;;
+  esac
+
+  case "$ARCH" in
+    x86_64)  nv_arch="x86_64" ;;
+    aarch64) nv_arch="arm64" ;;
+    armv7)   error "No neovim build for $ARCH"; return 1 ;;
+    *) error "No neovim build for $ARCH"; return 1 ;;
+  esac
+
+  version="${NEOVIM_VERSION:-$(latest_version neovim/neovim)}"
+  [ -n "$version" ] || { error "Could not resolve neovim version"; return 1; }
+  version="${version#v}"
+
+  info "Installing neovim $version ($nv_os/$nv_arch)"
+  tmp="$(mktemp -d)"
+  tarball="nvim-${nv_os}-${nv_arch}.tar.gz"
+  url="https://github.com/neovim/neovim/releases/download/v${version}/${tarball}"
+
+  if download_to "$url" "$tmp/$tarball"; then
+    # The tarball unpacks to a versioned directory; point a stable symlink at it.
+    $SUDO rm -rf "/opt/nvim-${nv_os}-${nv_arch}"
+    $SUDO mkdir -p /opt
+    if $SUDO tar xf "$tmp/$tarball" -C /opt; then
+      $SUDO ln -sf "/opt/nvim-${nv_os}-${nv_arch}/bin/nvim" /usr/local/bin/nvim
+    else
+      error "neovim extract failed"
+    fi
+  else
+    error "neovim download failed"
+  fi
+  rm -rf "$tmp"
+
+  command -v nvim > /dev/null 2>&1 || return 1
+  nvim --version | head -n 1
+}
+
+# neovim: install latest stable from GitHub releases
+install_neovim_github || { error "Failed to install neovim from GitHub releases"; exit 1; }
 
 # ─── lazygit ──────────────────────────────────────────────────────────
 install_lazygit() {
