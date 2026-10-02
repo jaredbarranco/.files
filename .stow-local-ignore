@@ -5,3 +5,8 @@
 bootstrap.sh
 README.md
 readme.md
+# Upstream oh-my-zsh samples: the installer writes its own copies into ~/.oh-my-zsh.
+# Stowing ours collides with those files, so keep them out of the package entirely.
+^\.oh-my-zsh/custom/example\.zsh$
+^\.oh-my-zsh/custom/plugins/example$
+^\.oh-my-zsh/custom/themes/example\.zsh-theme$

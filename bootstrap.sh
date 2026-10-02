@@ -318,8 +318,8 @@ setup_dotfiles() {
   fi
 
   if ! command -v stow > /dev/null 2>&1; then
-    error "stow not found; dotfiles not linked"
-    return 1
+    warn "stow not found; dotfiles not linked"
+    return 0
   fi
 
   info "Stowing dotfiles from $DOTFILES_DIR into $target"
@@ -328,12 +328,20 @@ setup_dotfiles() {
   # otherwise leave root-owned symlinks in the user's home directory.
   # GNU and BSD stat disagree on the format flag, so try both.
   owner="$(stat -c %U "$target" 2>/dev/null || stat -f %Su "$target" 2>/dev/null || echo "")"
+
+  # Stow aborts the *entire* run on a single conflict, which is a footgun: one
+  # stray file left in the repo stops every other config from being linked, and
+  # the resulting "Bootstrap complete." would be a lie. Report the conflict and
+  # keep going instead. Nothing should fail stow on a fresh clone -- if you see
+  # this, check .stow-local-ignore for a missing upstream-sample exclusion.
   if [ "$(id -u)" -eq 0 ] && [ -n "$owner" ] && [ "$owner" != "root" ]; then
     $SUDO -u "$owner" -H sh -c \
-      "cd '$DOTFILES_DIR' && stow --restow --target='$target' ."
+      "cd '$DOTFILES_DIR' && stow --restow --target='$target' ." ||
+      warn "stow reported a conflict; some files were not linked (see output above)"
   else
     # --restow so re-runs pick up .zshrc edits instead of silently no-op'ing.
-    ( cd "$DOTFILES_DIR" && stow --restow --target="$target" . )
+    ( cd "$DOTFILES_DIR" && stow --restow --target="$target" . ) ||
+      warn "stow reported a conflict; some files were not linked (see output above)"
   fi
 }
 
