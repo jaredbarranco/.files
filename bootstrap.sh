@@ -11,6 +11,7 @@
 #   STOW_TARGET     home to stow into          (default: $HOME)
 #   STOW_USER       user whose shell to set    (default: owner of $STOW_TARGET)
 #   SKIP_SHELL      1 to leave the login shell alone
+#   SKIP_NVIM_PLUGINS 1 to skip the headless lazy.nvim install
 #   INSTALL_DOCKER  1 to install docker        (default: 0 in a container)
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
 #   TREE_SITTER_VERSION pin, e.g. v0.27.0      (skips the GitHub API call)
@@ -425,6 +426,66 @@ install_kickstart() {
   fi
 }
 
+# ─── nvim plugins (lazy.nvim) ─────────────────────────────────────────
+# A fresh lazy.nvim asks "install missing plugins?" interactively on the first
+# launch, which is the wrong shape for a container: there is nobody there to
+# answer. Running the same install headlessly answers it in advance.
+#
+# `Lazy! install` (bang, not `Lazy sync`) is deliberate: bang installs whatever
+# is missing and leaves already-installed plugins at their current version, so
+# a re-run is a no-op instead of silently upgrading the config.
+install_nvim_plugins() {
+  if [ "${SKIP_NVIM_PLUGINS:-0}" = "1" ]; then
+    skip "SKIP_NVIM_PLUGINS=1; not pre-installing nvim plugins"
+    return 0
+  fi
+
+  target="${STOW_TARGET:-$HOME}"
+  if [ ! -f "$target/.config/nvim/init.lua" ]; then
+    skip "no $target/.config/nvim/init.lua; not pre-installing plugins"
+    return 0
+  fi
+
+  if ! command -v nvim > /dev/null 2>&1; then
+    warn "nvim not found; plugins will install on first launch"
+    return 0
+  fi
+
+  info "Pre-installing nvim plugins via lazy.nvim"
+
+  # Same reason stow runs as the target's owner: a root-run nvim would leave
+  # root-owned files under ~/.local/share/nvim, and the first real launch then
+  # cannot write its own plugin state.
+  owner="$(stat -c %U "$target" 2>/dev/null || stat -f %Su "$target" 2>/dev/null || echo "")"
+  log="$(mktemp)"
+
+  # `if ! ...` rather than a bare call: `set -e` would abort the whole script on
+  # a failed nvim, and this step is explicitly allowed to degrade.
+  if [ "$(id -u)" -eq 0 ] && [ -n "$owner" ] && [ "$owner" != "root" ]; then
+    if ! $SUDO -u "$owner" -H nvim --headless "+Lazy! install" +qa > "$log" 2>&1; then
+      status=1
+    else
+      status=0
+    fi
+  elif ! nvim --headless "+Lazy! install" +qa > "$log" 2>&1; then
+    status=1
+  else
+    status=0
+  fi
+
+  if [ "$status" -eq 0 ]; then
+    info "nvim plugins installed"
+    rm -f "$log"
+  else
+    # A config that does not use lazy.nvim fails here with "Not an editor
+    # command: Lazy"; a real failure is anything else. Either way it is not
+    # fatal: the first interactive launch is the fallback.
+    warn "nvim plugin pre-install failed; plugins will be offered on first launch:"
+    while IFS= read -r line; do warn "  $line"; done < "$log"
+    rm -f "$log"
+  fi
+}
+
 # ─── dotfiles ─────────────────────────────────────────────────────────
 setup_dotfiles() {
   target="${STOW_TARGET:-$HOME}"
@@ -560,6 +621,7 @@ install_docker
 install_omz
 setup_dotfiles
 install_kickstart
+install_nvim_plugins
 
 info "Bootstrap complete."
 
