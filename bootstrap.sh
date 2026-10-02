@@ -19,6 +19,12 @@ set -eu
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Slim container images often ship without TMPDIR. Neovim plugins that shell
+# out through temp files (json-nvim, and anything else using vim.loop's
+# os_tmpname) hard-error without it, so default to /tmp. Both this script and
+# ~/.zshrc set it, since an export here does not survive into later shells.
+export TMPDIR="${TMPDIR:-/tmp}"
+
 info()  { printf '\033[1;32m[INFO]\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m[WARN]\033[0m %s\n' "$*" >&2; }
 error() { printf '\033[1;31m[ERROR]\033[0m %s\n' "$*" >&2; }

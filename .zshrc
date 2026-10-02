@@ -1,3 +1,10 @@
+# ─── TMPDIR ───────────────────────────────────────────────────────────
+# Not set in slim container images. Neovim plugins that use temp files
+# (json-nvim among them) throw "Either $TEMP (Windows) or $TMPDIR (Unix) must
+# be defined" without it. macOS leaves it unset by default too, so this is not
+# container-only.
+export TMPDIR="${TMPDIR:-/tmp}"
+
 # ─── PATH helpers ─────────────────────────────────────────────────────
 # A container image has a subset of a Mac's toolchain. Prepend a directory
 # only when it actually exists, so a missing tool is a no-op instead of a
