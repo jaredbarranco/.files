@@ -4,11 +4,13 @@
 # Designed for ephemeral devcontainers:
 #   - multi-arch (nothing hardcodes x86_64)
 #   - assumes this repo is ALREADY cloned; only stows
-#   - no chsh / usermod (no-ops under remoteUser, harmful in slim images)
+#   - sets the login shell to zsh, because every config here is zsh-only
 #   - docker install is opt-in, since containers inherit the host socket
 #
 # Env overrides:
 #   STOW_TARGET     home to stow into          (default: $HOME)
+#   STOW_USER       user whose shell to set    (default: owner of $STOW_TARGET)
+#   SKIP_SHELL      1 to leave the login shell alone
 #   INSTALL_DOCKER  1 to install docker        (default: 0 in a container)
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
 #   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed from GitHub release)
@@ -401,7 +403,97 @@ setup_dotfiles() {
   fi
 }
 
+# ─── login shell ──────────────────────────────────────────────────────
+# Every config in this repo is zsh-only: .zshrc is never read by bash, so
+# without this a container logs in to a shell with no oh-my-zsh, none of the
+# custom functions (finder, gitr, npd, pa, ...), and no PATH tweaks. The
+# login shell comes from field 7 of /etc/passwd, which is exactly what ssh,
+# `coder` and `docker exec -it` read, so fixing that one field is what makes
+# the next session correct. Skipping this was the bug: it looks harmless on
+# a container that spawns an explicit shell, and silently breaks one that
+# does not.
+install_login_shell() {
+  if [ "${SKIP_SHELL:-0}" = "1" ]; then
+    skip "SKIP_SHELL=1; leaving the login shell alone"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Linux) ;;
+    *)
+      # macOS/BSD: chsh only accepts shells listed in /etc/shells and needs the
+      # user's password, which nobody wants in a script.
+      skip "not Linux; not changing the login shell (run: chsh -s $(command -v zsh || echo /usr/bin/zsh))"
+      return 0
+      ;;
+  esac
+
+  if ! command -v zsh > /dev/null 2>&1; then
+    error "zsh is not installed; cannot set the login shell"
+    return 0
+  fi
+
+  zsh_path="$(command -v zsh)"
+
+  # Resolve the user from the stow target's owner rather than $USER: under root
+  # (the common container case) $USER is root, but the shell that matters
+  # belongs to remoteUser, whose home is what we just stowed into.
+  target="${STOW_TARGET:-$HOME}"
+  owner="$(stat -c %U "$target" 2>/dev/null || stat -f %Su "$target" 2>/dev/null || echo "")"
+  [ -n "$owner" ] || owner="$(id -un)"
+
+  current="$(awk -F: -v u="$owner" '$1 == u { print $7 }' /etc/passwd 2> /dev/null || true)"
+  if [ "$current" = "$zsh_path" ]; then
+    info "login shell for $owner is already $zsh_path"
+    return 0
+  fi
+
+  info "Setting login shell for $owner: ${current:-unknown} -> $zsh_path"
+
+  # usermod lives in the `passwd` package, which slim images often drop.
+  # Editing /etc/passwd directly is the fallback: only field 7 changes, and
+  # rewriting one field beats leaving the shell wrong.
+  if command -v usermod > /dev/null 2>&1; then
+    if $SUDO usermod -s "$zsh_path" "$owner"; then
+      info "login shell set via usermod"
+      return 0
+    fi
+    warn "usermod failed; editing /etc/passwd directly"
+  fi
+
+  # cat > keeps the existing inode, so passwd's ownership and mode survive.
+  # A truncated /etc/passwd locks out every account, so back it up first.
+  passwd_tmp="$(mktemp)"
+  awk -F: -v OFS=: -v u="$owner" -v s="$zsh_path" \
+    '$1 == u { $7 = s } { print }' /etc/passwd > "$passwd_tmp"
+
+  if [ ! -s "$passwd_tmp" ] || ! grep -q "^${owner}:" "$passwd_tmp"; then
+    error "could not rewrite the $owner entry in /etc/passwd; leaving it untouched"
+    rm -f "$passwd_tmp"
+    return 0
+  fi
+
+  # Refuse to touch passwd if the backup cannot be taken: a truncated passwd
+  # locks out every account, which is worse than a wrong login shell.
+  if ! $SUDO cp -p /etc/passwd /etc/passwd.bak; then
+    error "could not back up /etc/passwd; leaving the login shell unchanged"
+    rm -f "$passwd_tmp"
+    return 0
+  fi
+
+  if $SUDO sh -c "cat '$passwd_tmp' > /etc/passwd"; then
+    rm -f "$passwd_tmp"
+    info "login shell set via /etc/passwd"
+  else
+    rm -f "$passwd_tmp"
+    $SUDO cp -p /etc/passwd.bak /etc/passwd 2> /dev/null || true
+    error "failed to write /etc/passwd (restored from backup)"
+    return 0
+  fi
+}
+
 # ─── run ──────────────────────────────────────────────────────────────
+install_login_shell
 install_lazygit
 install_herdr
 install_gh
@@ -411,3 +503,25 @@ setup_dotfiles
 install_kickstart
 
 info "Bootstrap complete."
+
+# Report the shell the *next* session will get. A stale login is the single
+# most confusing post-bootstrap failure -- everything looks installed, then
+# none of it exists in the terminal.
+case "$(uname -s)" in
+  Linux)
+    shell_now="$(awk -F: -v u="$(id -un)" '$1 == u { print $7 }' /etc/passwd 2> /dev/null || true)"
+    case "$(basename "${shell_now:-none}")" in
+      zsh)
+        info "Next shell: ${shell_now} -- \`exec zsh\` to switch this session now."
+        ;;
+      *)
+        warn "Login shell is ${shell_now:-unknown}, not zsh: .zshrc and every"
+        warn "~/.oh-my-zsh custom plugin (finder, gitr, npd, pa, ...) will not load."
+        warn "Fix with: chsh -s $(command -v zsh || echo /usr/bin/zsh) && exec zsh"
+        ;;
+    esac
+    ;;
+  *)
+    skip "not Linux; login shell not managed here (chsh -s $(command -v zsh || echo /usr/bin/zsh))"
+    ;;
+esac
