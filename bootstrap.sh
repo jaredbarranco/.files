@@ -15,7 +15,7 @@
 #   INSTALL_DOCKER  1 to install docker        (default: 0 in a container)
 #   LAZYGIT_VERSION pin, e.g. v0.44.1          (skips the GitHub API call)
 #   TREE_SITTER_VERSION pin, e.g. v0.27.0      (skips the GitHub API call)
-#   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed from GitHub release)
+#   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed/updated from GitHub release)
 #   HERDR_VERSION   pin, e.g. v1.2.3
 #   OMZ_VERSION     pin an oh-my-zsh commit
 #   KICKSTART_VERSION pin a kickstart.nvim ref (branch or tag)
@@ -165,14 +165,45 @@ download_to() {
   curl -fSL --retry 3 --retry-delay 2 -o "$2" "$1"
 }
 
+# version_gt <a> <b>: succeeds (0) when <a> is strictly newer than <b>.
+# Dotted numeric versions only (0.11.2, 1.2.3). awk keeps this portable;
+# `sort -V` is GNU-only and BSD/macOS sort has no equivalent.
+version_gt() {
+  awk -v a="$1" -v b="$2" 'BEGIN {
+    na = split(a, x, "."); nb = split(b, y, ".")
+    n = (na > nb) ? na : nb
+    for (i = 1; i <= n; i++) {
+      av = (i <= na) ? x[i] + 0 : 0
+      bv = (i <= nb) ? y[i] + 0 : 0
+      if (av > bv) exit 0
+      if (av < bv) exit 1
+    }
+    exit 1
+  }'
+}
+
 # ─── neovim (github release) ──────────────────────────────────────────
 # Installed from upstream releases, not the distro package: distro neovim on
 # LTS images is frequently too old for the kickstart config (e.g. newer
 # autocmd events and APIs). No package-manager fallback on purpose.
 install_neovim_github() {
+  version="${NEOVIM_VERSION:-$(latest_version neovim/neovim)}"
+  version="${version#v}"
+
   if command -v nvim > /dev/null 2>&1; then
-    info "nvim already present"
-    return 0
+    installed="$(nvim --version | sed -n '1s/^NVIM v\([0-9][0-9.]*\).*/\1/p')"
+    # "Already installed" is not the same as "good enough": kickstart and the
+    # plugins installed below track recent neovim APIs, so an nvim older than
+    # the latest stable release is exactly what breaks a fresh plugin install.
+    # Only short-circuit when no newer release is resolvable, or the installed
+    # build is already current (or ahead, e.g. a nightly).
+    if [ -z "$version" ] || ! version_gt "$version" "$installed"; then
+      info "nvim already present (v${installed:-unknown})"
+      return 0
+    fi
+    info "Updating neovim v$installed -> v$version"
+  else
+    [ -n "$version" ] || { error "Could not resolve neovim version"; return 1; }
   fi
 
   case "$(uname -s)" in
@@ -187,10 +218,6 @@ install_neovim_github() {
     armv7)   error "No neovim build for $ARCH"; return 1 ;;
     *) error "No neovim build for $ARCH"; return 1 ;;
   esac
-
-  version="${NEOVIM_VERSION:-$(latest_version neovim/neovim)}"
-  [ -n "$version" ] || { error "Could not resolve neovim version"; return 1; }
-  version="${version#v}"
 
   info "Installing neovim $version ($nv_os/$nv_arch)"
   tmp="$(mktemp -d)"
