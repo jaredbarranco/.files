@@ -102,3 +102,6 @@ path_prepend "$HOME/.antigravity/antigravity/bin"
 
 # Homebrew keg-only binaries.
 path_append "/opt/homebrew/opt/libpq/bin"
+
+# ─── cli defaults ───────────────────────────────────────────────────────
+export AWS_PROFILE=dev ## Autena default profile
