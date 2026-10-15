@@ -431,6 +431,58 @@ install_gh() {
   esac
 }
 
+# ─── aws cli ──────────────────────────────────────────────────────────
+# AWS CLI v2 ships as a self-contained bundled installer rather than through
+# distro repos (and the distro packages, where they exist, lag badly), so this
+# follows the upstream "command line installer" flow:
+#   https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+# On Linux the installer script is identical on every distro -- it bundles its
+# own python -- so only the asset name varies, by arch. macOS uses a pkg.
+install_awscli() {
+  if command -v aws > /dev/null 2>&1; then
+    info "aws already installed"
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Linux)
+      case "$ARCH" in
+        x86_64)  aws_arch="x86_64" ;;
+        aarch64) aws_arch="aarch64" ;;
+        *) error "No aws-cli build for $ARCH"; return 0 ;;
+      esac
+
+      info "Installing aws-cli ($aws_arch)"
+      tmp="$(mktemp -d)"
+      if download_to \
+        "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" \
+        "$tmp/awscliv2.zip"; then
+        unzip -q "$tmp/awscliv2.zip" -d "$tmp" &&
+          $SUDO "$tmp/aws/install" --update
+      else
+        error "aws-cli download failed"
+      fi
+      rm -rf "$tmp"
+      ;;
+    Darwin)
+      info "Installing aws-cli (macOS)"
+      tmp="$(mktemp -d)"
+      if download_to \
+        "https://awscli.amazonaws.com/AWSCLIV2.pkg" "$tmp/AWSCLIV2.pkg"; then
+        $SUDO installer -pkg "$tmp/AWSCLIV2.pkg" -target /
+      else
+        error "aws-cli download failed"
+      fi
+      rm -rf "$tmp"
+      ;;
+    *)
+      skip "aws-cli install not implemented for $(uname -s)"
+      ;;
+  esac
+
+  command -v aws > /dev/null 2>&1 && aws --version
+}
+
 # ─── docker (opt-in) ──────────────────────────────────────────────────
 in_container() {
   [ -f /.dockerenv ] && return 0
@@ -761,6 +813,7 @@ install_lazygit
 install_herdr
 install_tree_sitter
 install_gh
+install_awscli
 install_docker
 install_omz
 install_tmux_plugins
