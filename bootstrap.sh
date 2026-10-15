@@ -17,6 +17,7 @@
 #   TREE_SITTER_VERSION pin, e.g. v0.27.0      (skips the GitHub API call)
 #   NEOVIM_VERSION  pin, e.g. v0.11.2          (installed/updated from GitHub release)
 #   HERDR_VERSION   pin, e.g. v1.2.3
+#   BUN_VERSION     pin, e.g. 1.1.34              (default: latest)
 #   OMZ_VERSION     pin an oh-my-zsh commit
 #   KICKSTART_VERSION pin a kickstart.nvim ref (branch or tag)
 set -eu
@@ -483,6 +484,55 @@ install_awscli() {
   command -v aws > /dev/null 2>&1 && aws --version
 }
 
+# ─── mise + bun ───────────────────────────────────────────────────────
+# Neuron (mark.nvim's terminal markdown preview) needs the Bun runtime. Bun is
+# installed through mise, which also owns the other user-level toolchains. mise
+# is not part of every base image and its installer is user-local, so install
+# it (into the stow target's home, as its owner) before recording the tool.
+install_mise() {
+  home="${STOW_TARGET:-$HOME}"
+  mise_bin="$home/.local/bin/mise"
+
+  if command -v mise > /dev/null 2>&1 || [ -x "$mise_bin" ]; then
+    info "mise already installed"
+    return 0
+  fi
+
+  info "Installing mise"
+  run_as_owner sh -c 'curl -fsSL https://mise.run | sh' ||
+    warn "mise install failed; bun will not be installed"
+}
+
+install_bun() {
+  home="${STOW_TARGET:-$HOME}"
+  mise_bin="$home/.local/bin/mise"
+
+  install_mise
+
+  # Prefer mise on PATH, but fall back to the path the installer just used: the
+  # current script's PATH predates this run.
+  mise_cmd="$(command -v mise 2> /dev/null || true)"
+  [ -n "$mise_cmd" ] && [ -x "$mise_cmd" ] || mise_cmd="$mise_bin"
+  if [ ! -x "$mise_cmd" ]; then
+    skip "mise not available; not installing bun"
+    return 0
+  fi
+
+  if command -v bun > /dev/null 2>&1; then
+    info "bun already installed"
+    return 0
+  fi
+
+  # `use -g` records the pin in the owner's global mise config (declarative and
+  # idempotent); `install` then materializes it and its shims.
+  bun_version="${BUN_VERSION:-latest}"
+  info "Installing bun@$bun_version via mise"
+  run_as_owner "$mise_cmd" use -g "bun@$bun_version" ||
+    warn "mise use failed; bun will be missing"
+  run_as_owner "$mise_cmd" install ||
+    warn "mise install failed; bun may be incomplete"
+}
+
 # ─── docker (opt-in) ──────────────────────────────────────────────────
 in_container() {
   [ -f /.dockerenv ] && return 0
@@ -814,6 +864,7 @@ install_herdr
 install_tree_sitter
 install_gh
 install_awscli
+install_bun
 install_docker
 install_omz
 install_tmux_plugins

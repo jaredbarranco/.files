@@ -89,6 +89,12 @@ path_prepend "$HOME/go/bin"
 path_prepend "$HOME/.local/bin"
 path_prepend "$HOME/.opencode/bin"
 
+# mise-managed toolchains (bun for mark.nvim, node, ...). The shims dir alone
+# is enough to expose them and stays cheap; `mise activate` additionally
+# rewrites PATH per directory and requires the mise binary on every shell.
+# `path_prepend` no-ops until mise has installed at least one tool.
+path_prepend "$HOME/.local/share/mise/shims"
+
 # Editor/agent CLIs installed under the user's home on macOS. These were
 # previously hardcoded absolute paths, which do not exist in a container.
 path_prepend "$HOME/.codeium/windsurf/bin"
