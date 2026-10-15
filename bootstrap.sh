@@ -562,6 +562,73 @@ install_nvim_plugins() {
 }
 
 # ─── dotfiles ─────────────────────────────────────────────────────────
+# stow never overwrites: if a real file already sits where a symlink should go
+# it aborts the whole run with "existing target is neither a link nor a
+# directory" and links nothing else. A fresh home -- or a devcontainer image
+# seeded from /etc/skel -- ships its own .zshrc/.tmux.conf, and oh-my-zsh even
+# writes ~/.oh-my-zsh/custom/example.zsh, any of which stops every config from
+# being linked. Delete just the paths we are about to link before stowing.
+# Anything absent from the package is left untouched, and .stow-local-ignore is
+# honoured so a file stow would have skipped (e.g. ~/.gitignore, the oh-my-zsh
+# samples) is never deleted.
+clear_stow_conflicts() {
+  pkg="$1"
+  target="$2"
+
+  # Effective ignore list: stow's own defaults plus .stow-local-ignore, minus
+  # comments and blanks (an empty line is a regex that matches every path).
+  patterns="$(mktemp)"
+  {
+    if [ -f "$pkg/.stow-local-ignore" ]; then
+      grep -v '^[[:space:]]*#' "$pkg/.stow-local-ignore"
+    fi
+    printf '%s\n' '\.git$' '\.gitignore$' '\.gitmodules$' '\.stow-local-ignore$'
+  } 2> /dev/null | grep -v '^[[:space:]]*$' > "$patterns" || true
+
+  # A path is ignored if it, or any parent directory, matches a pattern: stow
+  # prunes an ignored directory and everything beneath it. The loop variable is
+  # deliberately not `rel`: POSIX sh has no `local`, so touching the caller's
+  # variable would corrupt the destination path.
+  is_ignored() {
+    _ig_path="$1"
+    while :; do
+      if printf '%s\n' "$_ig_path" | grep -qEf "$patterns"; then
+        return 0
+      fi
+      case "$_ig_path" in
+        */*) _ig_path="${_ig_path%/*}" ;;
+        *) break ;;
+      esac
+    done
+    return 1
+  }
+
+  find "$pkg" -mindepth 1 \( -name .git -o -name .stow-local-ignore \) -prune -o -print |
+    while IFS= read -r src; do
+      rel="${src#"$pkg"/}"
+      if is_ignored "$rel"; then
+        continue
+      fi
+
+      dst="$target/$rel"
+
+      # The package wants a directory here, but the target has a file in the way.
+      if [ -d "$src" ] && [ ! -L "$src" ]; then
+        if [ -e "$dst" ] && [ ! -d "$dst" ]; then
+          warn "removing $dst (file in the way of directory $rel)"
+          rm -rf "$dst"
+        fi
+      # A real file where a symlink should go: the actual conflict stow aborts on.
+      # A symlink is left for --restow to relink, so re-runs stay clean.
+      elif [ -e "$dst" ] && [ ! -L "$dst" ]; then
+        info "removing existing $dst so stow can link $rel"
+        rm -f "$dst"
+      fi
+    done
+
+  rm -f "$patterns"
+}
+
 setup_dotfiles() {
   target="${STOW_TARGET:-$HOME}"
   if [ ! -d "$target" ]; then
@@ -574,6 +641,8 @@ setup_dotfiles() {
     return 0
   fi
 
+  clear_stow_conflicts "$DOTFILES_DIR" "$target"
+
   info "Stowing dotfiles from $DOTFILES_DIR into $target"
 
   # Stow must write as the owner of the target home. Running as root would
@@ -582,10 +651,10 @@ setup_dotfiles() {
   owner="$(stat -c %U "$target" 2>/dev/null || stat -f %Su "$target" 2>/dev/null || echo "")"
 
   # Stow aborts the *entire* run on a single conflict, which is a footgun: one
-  # stray file left in the repo stops every other config from being linked, and
-  # the resulting "Bootstrap complete." would be a lie. Report the conflict and
-  # keep going instead. Nothing should fail stow on a fresh clone -- if you see
-  # this, check .stow-local-ignore for a missing upstream-sample exclusion.
+  # stray file stops every other config from being linked, and the resulting
+  # "Bootstrap complete." would be a lie. clear_stow_conflicts above has already
+  # removed the usual culprits (a pre-existing ~/.zshrc etc.); anything still
+  # conflicting comes from the repo itself, so report it and keep going.
   if [ "$(id -u)" -eq 0 ] && [ -n "$owner" ] && [ "$owner" != "root" ]; then
     $SUDO -u "$owner" -H sh -c \
       "cd '$DOTFILES_DIR' && stow --restow --target='$target' ." ||
