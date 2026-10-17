@@ -432,6 +432,27 @@ install_gh() {
   esac
 }
 
+# ─── tldr ─────────────────────────────────────────────────────────────
+# Official client from tldr-pages, installed via npm (already present from
+# the node install above). Pages download lazily on first use.
+install_tldr() {
+  if command -v tldr > /dev/null 2>&1; then
+    info "tldr already installed"
+    return 0
+  fi
+
+  if ! command -v npm > /dev/null 2>&1; then
+    warn "npm not available; tldr not installed"
+    return 0
+  fi
+
+  info "Installing tldr (npm)"
+  # Distro node installs npm's global prefix under system paths, so this
+  # needs root; $SUDO is empty when already root.
+  $SUDO npm install -g tldr ||
+    warn "tldr install failed; pages client will be missing"
+}
+
 # ─── aws cli ──────────────────────────────────────────────────────────
 # AWS CLI v2 ships as a self-contained bundled installer rather than through
 # distro repos (and the distro packages, where they exist, lag badly), so this
@@ -863,6 +884,7 @@ install_lazygit
 install_herdr
 install_tree_sitter
 install_gh
+install_tldr
 install_awscli
 install_bun
 install_docker
