@@ -5,6 +5,15 @@
 # container-only.
 export TMPDIR="${TMPDIR:-/tmp}"
 
+# ─── SHELL ────────────────────────────────────────────────────────────
+# bootstrap.sh writes zsh into /etc/passwd, but a session that predates that
+# (or one entered with `exec zsh` from bash) keeps the old SHELL, and tools
+# that trust it -- nvim's :terminal, sudo, ... -- keep spawning bash. We are
+# zsh by definition here, so point it at the zsh on PATH.
+if command -v zsh > /dev/null 2>&1; then
+  export SHELL="$(command -v zsh)"
+fi
+
 # ─── PATH helpers ─────────────────────────────────────────────────────
 # A container image has a subset of a Mac's toolchain. Prepend a directory
 # only when it actually exists, so a missing tool is a no-op instead of a
