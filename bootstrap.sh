@@ -453,6 +453,26 @@ install_tldr() {
     warn "tldr install failed; pages client will be missing"
 }
 
+# ─── bruno cli ────────────────────────────────────────────────────────
+# Bruno's CLI is what runs collections from a terminal and in CI. It ships only
+# on npm as @usebruno/cli, and the binary it provides is `bru`.
+install_bruno() {
+  if command -v bru > /dev/null 2>&1; then
+    info "bruno cli already installed"
+    return 0
+  fi
+
+  if ! command -v npm > /dev/null 2>&1; then
+    warn "npm not available; bruno cli not installed"
+    return 0
+  fi
+
+  info "Installing bruno cli (npm)"
+  # Same as tldr: distro node puts the global prefix under system paths.
+  $SUDO npm install -g @usebruno/cli ||
+    warn "bruno cli install failed; the bru command will be missing"
+}
+
 # ─── aws cli ──────────────────────────────────────────────────────────
 # AWS CLI v2 ships as a self-contained bundled installer rather than through
 # distro repos (and the distro packages, where they exist, lag badly), so this
@@ -885,6 +905,7 @@ install_herdr
 install_tree_sitter
 install_gh
 install_tldr
+install_bruno
 install_awscli
 install_bun
 install_docker
