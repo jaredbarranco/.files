@@ -20,6 +20,10 @@
 #   BUN_VERSION     pin, e.g. 1.1.34              (default: latest)
 #   OMZ_VERSION     pin an oh-my-zsh commit
 #   KICKSTART_VERSION pin a kickstart.nvim ref (branch or tag)
+#   PKG_LOCK_TIMEOUT seconds to wait out package-manager lock contention
+#                    (default: 600)
+#   PKG_LOCK_DELAY  first lock retry delay in seconds, doubled each retry
+#                    (default: 5)
 set -eu
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -88,10 +92,93 @@ if [ "$PKG_MGR" = "none" ]; then
   exit 1
 fi
 
+# ─── package manager lock retries ─────────────────────────────────────
+# On a freshly booted machine this script is not the only apt/dpkg client:
+# cloud-init, unattended-upgrades, image provisioning and possibly another
+# copy of this script all start at once. Whichever one is late to the lock
+# dies with a message like:
+#
+#   E: Could not get lock /var/lib/apt/lists/lock. It is held by process 5400 (apt-get)
+#   E: Unable to lock directory /var/lib/apt/lists/
+#
+# The failure is transient -- the holder finishes and releases the lock -- so
+# retry it instead of aborting the bootstrap. Only lock contention is retried;
+# a missing package or a permission error would otherwise spin for the whole
+# timeout and bury the real error. After PKG_LOCK_TIMEOUT seconds the original
+# failure is returned, so a genuinely stuck lock still fails loudly instead of
+# hanging the bootstrap forever.
+PKG_LOCK_TIMEOUT="${PKG_LOCK_TIMEOUT:-600}"
+PKG_LOCK_DELAY="${PKG_LOCK_DELAY:-5}"
+[ "$PKG_LOCK_TIMEOUT" -ge 0 ] 2> /dev/null || PKG_LOCK_TIMEOUT=600
+
+# pkg_retry <package-manager command...>
+# Variables are prefixed because POSIX sh has no `local`: without it, this
+# would clobber same-named state in the calling function.
+pkg_retry() {
+  _pr_waited=0
+  _pr_delay="$PKG_LOCK_DELAY"
+  # A zero (or nonsense) delay would turn the timeout into a busy loop that
+  # never advances the clock.
+  [ "$_pr_delay" -ge 1 ] 2> /dev/null || _pr_delay=1
+  _pr_log="$(mktemp)"
+  _pr_status_file="$(mktemp)"
+
+  while :; do
+    # Stream the output so long installs stay visible, while keeping a copy to
+    # classify the failure. POSIX sh has no PIPESTATUS, so the real exit status
+    # travels through its own file; the braces keep `set -e` from aborting the
+    # subshell before it can record the failure.
+    { _pr_status=0; "$@" 2>&1 || _pr_status=$?; echo "$_pr_status" > "$_pr_status_file"; } | tee "$_pr_log"
+    _pr_status="$(cat "$_pr_status_file" 2> /dev/null || echo 1)"
+    [ -n "$_pr_status" ] || _pr_status=1
+
+    if [ "$_pr_status" -eq 0 ]; then
+      rm -f "$_pr_log" "$_pr_status_file"
+      return 0
+    fi
+
+    _pr_out="$(cat "$_pr_log" 2> /dev/null || true)"
+
+    # A permission problem is worded like a lock problem but never clears up by
+    # waiting, so fail it immediately instead of spinning out the timeout.
+    case "$_pr_out" in
+      *"Permission denied"* | *"permission denied"* | *"Read-only file system"*)
+        rm -f "$_pr_log" "$_pr_status_file"
+        return "$_pr_status"
+        ;;
+    esac
+
+    # apt/dpkg, apk, dnf/yum and pacman each word lock contention differently.
+    case "$_pr_out" in
+      *"Could not get lock"* | *"Unable to lock"* | \
+        *"Unable to acquire the dpkg frontend lock"* | *"dpkg frontend lock"* | \
+        *"is held by process"* | *"temporary error (try again later)"* | \
+        *"Waiting for process with pid"* | *"Cannot get the lock"* | \
+        *"unable to lock database"*)
+        ;;
+      *)
+        rm -f "$_pr_log" "$_pr_status_file"
+        return "$_pr_status"
+        ;;
+    esac
+
+    if [ "$_pr_waited" -ge "$PKG_LOCK_TIMEOUT" ]; then
+      error "package manager lock still busy after ${_pr_waited}s; giving up"
+      rm -f "$_pr_log" "$_pr_status_file"
+      return "$_pr_status"
+    fi
+
+    warn "package manager lock busy; retrying in ${_pr_delay}s (waited ${_pr_waited}s/${PKG_LOCK_TIMEOUT}s)"
+    sleep "$_pr_delay"
+    _pr_waited=$((_pr_waited + _pr_delay))
+    [ "$_pr_delay" -ge 30 ] || _pr_delay=$((_pr_delay * 2))
+  done
+}
+
 pkg_refresh() {
   case "$PKG_MGR" in
-    apt)  DEBIAN_FRONTEND=noninteractive $SUDO apt-get update -qq ;;
-    apk)  $SUDO apk update -qq ;;
+    apt)  pkg_retry $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq ;;
+    apk)  pkg_retry $SUDO apk update -qq ;;
     *)    : ;;
   esac
 }
@@ -118,11 +205,11 @@ install_pkgs() {
   info "Installing:$missing"
   # shellcheck disable=SC2086
   case "$PKG_MGR" in
-    apt)    $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing ;;
-    apk)    $SUDO apk add --no-cache $missing ;;
-    dnf)    $SUDO dnf install -y $missing ;;
-    yum)    $SUDO yum install -y $missing ;;
-    pacman) $SUDO pacman -Sy --noconfirm --needed $missing ;;
+    apt)    pkg_retry $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing ;;
+    apk)    pkg_retry $SUDO apk add --no-cache $missing ;;
+    dnf)    pkg_retry $SUDO dnf install -y $missing ;;
+    yum)    pkg_retry $SUDO yum install -y $missing ;;
+    pacman) pkg_retry $SUDO pacman -Sy --noconfirm --needed $missing ;;
   esac
 }
 
@@ -420,7 +507,7 @@ install_gh() {
       printf 'deb [arch=%s signed-by=%s] https://cli.github.com/packages stable main\n' \
         "$ARCH" "$keyring" \
         | $SUDO tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-      $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+      pkg_retry $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
       install_pkgs gh
       ;;
     apk)
