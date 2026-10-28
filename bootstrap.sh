@@ -92,6 +92,24 @@ if [ "$PKG_MGR" = "none" ]; then
   exit 1
 fi
 
+# ─── startup delay ─────────────────────────────────────────────────────
+WAIT_SECS="${BOOTSTRAP_WAIT:-20}"
+for arg in "$@"; do
+  case "$arg" in
+    --no-wait|--nowait)
+      WAIT_SECS=0
+      ;;
+    --wait=*)
+      WAIT_SECS="${arg#--wait=}"
+      ;;
+  esac
+done
+[ "$WAIT_SECS" -ge 0 ] 2> /dev/null || WAIT_SECS=20
+if [ "$WAIT_SECS" -gt 0 ]; then
+  info "Starting in ${WAIT_SECS}s (use --no-wait to skip)"
+  sleep "$WAIT_SECS"
+fi
+
 # ─── package manager lock retries ─────────────────────────────────────
 # On a freshly booted machine this script is not the only apt/dpkg client:
 # cloud-init, unattended-upgrades, image provisioning and possibly another
