@@ -538,113 +538,76 @@ install_gh() {
 }
 
 # ─── 1password cli ────────────────────────────────────────────────────
-# The binary is `op`. It only ships through 1Password's own repos (apt, apk,
-# rpm), so each manager needs its key/repo configured first. On apt the
-# packages are additionally signed with debsig-verify: without the policy and
-# its keyring, `apt install 1password-cli` dies with "debsig: No policy
-# found", which reads like a broken package rather than a missing setup step.
+# The binary is `op`. Upstream's distro repos each need their own key/repo
+# setup (and on apt a debsig policy), so use their documented manual install
+# instead: fetch the release zip and drop the binary in /usr/local/bin. The
+# shared group and setgid bit let any user run op against the machine's
+# signed-in account without handing out its credentials.
 install_op() {
   if command -v op > /dev/null 2>&1; then
     info "1password cli already installed"
     return 0
   fi
 
-  case "$PKG_MGR" in
-    apt)
-      # The repo key is ASCII-armored, and apt needs it dearmored, so gpg is a
-      # hard requirement here -- slim images do not all ship it.
-      if ! install_pkgs gpg::gnupg; then
-        warn "gpg unavailable; 1password cli not installed"
-        return 0
-      fi
-
-      info "Installing 1Password CLI via apt"
-      keyring=/usr/share/keyrings/1password-archive-keyring.gpg
-      policy_dir=/etc/debsig/policies/AC2D62742012EA22
-      debsig_keyring_dir=/usr/share/debsig/keyrings/AC2D62742012EA22
-
-      if [ ! -s "$keyring" ]; then
-        curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
-          | $SUDO gpg --dearmor --yes --output "$keyring" || {
-          warn "could not fetch the 1Password repo key; op not installed"
-          return 0
-        }
-      fi
-      $SUDO chmod go+r "$keyring"
-
-      # $ARCH is already the Debian spelling, which is what this repo's paths
-      # use (amd64/arm64/386/arm).
-      printf 'deb [arch=%s signed-by=%s] https://downloads.1password.com/linux/debian/%s stable main\n' \
-        "$ARCH" "$keyring" "$ARCH" \
-        | $SUDO tee /etc/apt/sources.list.d/1password.list > /dev/null
-
-      $SUDO mkdir -p "$policy_dir" "$debsig_keyring_dir"
-      if ! curl -fsSL https://downloads.1password.com/linux/debian/debsig/1password.pol \
-        | $SUDO tee "$policy_dir/1password.pol" > /dev/null; then
-        warn "could not fetch the 1Password debsig policy; op not installed"
-        return 0
-      fi
-      if ! curl -fsSL https://downloads.1password.com/linux/keys/1password.asc \
-        | $SUDO gpg --dearmor --yes --output "$debsig_keyring_dir/debsig.gpg"; then
-        warn "could not fetch the 1Password debsig keyring; op not installed"
-        return 0
-      fi
-
-      pkg_retry $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-      install_pkgs op::1password-cli ||
-        warn "1password cli install failed; the op command will be missing"
-      ;;
-    apk)
-      # Upstream publishes this repo for x86_64 only.
-      if [ "$ARCH" != "x86_64" ]; then
-        skip "1password cli has no alpine repo for $ARCH"
-        return 0
-      fi
-
-      info "Installing 1Password CLI via apk"
-      repo=https://downloads.1password.com/linux/alpinelinux/stable/
-      if ! grep -qxF "$repo" /etc/apk/repositories 2> /dev/null; then
-        printf '%s\n' "$repo" | $SUDO tee -a /etc/apk/repositories > /dev/null
-      fi
-
-      key=/etc/apk/keys/support@1password.com-61ddfc31.rsa.pub
-      if [ ! -s "$key" ]; then
-        curl -fsSL https://downloads.1password.com/linux/keys/alpinelinux/support@1password.com-61ddfc31.rsa.pub \
-          | $SUDO tee "$key" > /dev/null || {
-          warn "could not fetch the 1Password apk key; op not installed"
-          return 0
-        }
-      fi
-
-      pkg_retry $SUDO apk update -qq
-      install_pkgs op::1password-cli ||
-        warn "1password cli install failed; the op command will be missing"
-      ;;
-    dnf|yum)
-      info "Installing 1Password CLI via $PKG_MGR"
-      pkg_retry $SUDO rpm --import https://downloads.1password.com/linux/keys/1password.asc ||
-        warn "could not import the 1Password rpm key; op install may fail"
-
-      if [ ! -f /etc/yum.repos.d/1password.repo ]; then
-        # Single-quoted so $basearch stays literal for dnf to expand.
-        printf '%s\n' \
-          '[1password]' \
-          'name=1Password Stable Channel' \
-          'baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch' \
-          'enabled=1' \
-          'gpgcheck=1' \
-          'repo_gpgcheck=1' \
-          'gpgkey=https://downloads.1password.com/linux/keys/1password.asc' \
-          | $SUDO tee /etc/yum.repos.d/1password.repo > /dev/null
-      fi
-
-      install_pkgs op::1password-cli ||
-        warn "1password cli install failed; the op command will be missing"
-      ;;
+  # 1Password spells its assets differently from detect_arch's GitHub spelling.
+  case "$ARCH" in
+    x86_64)  op_arch=amd64 ;;
+    aarch64) op_arch=arm64 ;;
+    armv7)   op_arch=arm ;;
+    i386)    op_arch=386 ;;
     *)
-      skip "1password cli install not implemented for $PKG_MGR"
+      skip "1password cli has no build for $ARCH"
+      return 0
       ;;
   esac
+
+  if ! command -v unzip > /dev/null 2>&1; then
+    warn "unzip unavailable; 1password cli not installed"
+    return 0
+  fi
+
+  info "Installing 1Password CLI from the release zip"
+
+  # The check endpoint reports the newest CLI2 release; an empty answer would
+  # otherwise turn into a request for ".../op_linux_amd64_v.zip".
+  op_version="$(curl -fsSL https://app-updates.agilebits.com/check/1/0/CLI2/en/2.0.0/N 2> /dev/null \
+    | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+  if [ -z "$op_version" ]; then
+    warn "couldn't determine the latest 1Password CLI version; op not installed"
+    return 0
+  fi
+
+  op_tmp="$(mktemp -d)"
+  if ! curl -fSL --retry 3 --retry-delay 2 -o "$op_tmp/op.zip" \
+    "https://cache.agilebits.com/dist/1P/op2/pkg/v${op_version}/op_linux_${op_arch}_v${op_version}.zip"; then
+    rm -rf "$op_tmp"
+    warn "could not download 1Password CLI; op not installed"
+    return 0
+  fi
+
+  if ! unzip -q "$op_tmp/op.zip" -d "$op_tmp/op"; then
+    rm -rf "$op_tmp"
+    warn "could not unpack 1Password CLI; op not installed"
+    return 0
+  fi
+
+  if ! $SUDO mv "$op_tmp/op/op" /usr/local/bin/; then
+    rm -rf "$op_tmp"
+    warn "could not install 1Password CLI; op not installed"
+    return 0
+  fi
+  rm -rf "$op_tmp"
+
+  # Alpine ships addgroup instead of groupadd.
+  if command -v groupadd > /dev/null 2>&1; then
+    $SUDO groupadd -f onepassword-cli
+  else
+    $SUDO addgroup onepassword-cli 2> /dev/null || true
+  fi
+  $SUDO chgrp onepassword-cli /usr/local/bin/op ||
+    warn "could not chgrp op; it may not be usable by other users"
+  $SUDO chmod g+s /usr/local/bin/op ||
+    warn "could not set the setgid bit on op"
 
   # `if` rather than `cmd && op --version`: a missing op at the end of the
   # function would return non-zero and, under `set -e`, abort the bootstrap
