@@ -30,6 +30,16 @@ path_append() {
   fi
 }
 
+# ─── homebrew (macOS) ─────────────────────────────────────────────────
+# bootstrap.sh installs Homebrew and exports its shellenv for that run only; a
+# new login shell needs the same PATH setup. Apple Silicon (/opt/homebrew) and
+# Intel (/usr/local) use different prefixes, so source whichever exists.
+if [[ -x /opt/homebrew/bin/brew ]]; then
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+elif [[ -x /usr/local/bin/brew ]]; then
+  eval "$(/usr/local/bin/brew shellenv)"
+fi
+
 # ─── oh-my-zsh ────────────────────────────────────────────────────────
 export ZSH="$HOME/.oh-my-zsh"
 

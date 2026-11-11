@@ -1,6 +1,10 @@
 #!/bin/sh
 # Dotfiles bootstrap. Safe to re-run: every step is idempotent.
 #
+# Supports ephemeral devcontainers (apt/apk/dnf/yum/pacman) and macOS. On
+# macOS there is no native package manager, so Homebrew is installed first
+# and every package/tool install below goes through `brew`.
+#
 # Designed for ephemeral devcontainers:
 #   - multi-arch (nothing hardcodes x86_64)
 #   - assumes this repo is ALREADY cloned; only stows
@@ -24,6 +28,8 @@
 #                    (default: 600)
 #   PKG_LOCK_DELAY  first lock retry delay in seconds, doubled each retry
 #                    (default: 5)
+#   CLT_TIMEOUT     seconds to wait for Xcode Command Line Tools on a fresh
+#                    macOS install (default: 1800)
 set -eu
 
 DOTFILES_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -74,23 +80,26 @@ detect_arch() {
 ARCH="$(detect_arch)"
 info "Architecture: $ARCH"
 
+# ─── platform ─────────────────────────────────────────────────────────
+if [ "$(uname -s)" = "Darwin" ]; then
+  IS_MACOS=1
+else
+  IS_MACOS=0
+fi
+
 # ─── package manager ──────────────────────────────────────────────────
+# macOS has no apt/apk/dnf/pacman; Homebrew is the package manager there and
+# is installed below, after the startup delay (it is slow and may prompt for a
+# sudo password). Every other platform uses its native manager.
 detect_pkg_manager() {
-  if command -v apt-get > /dev/null 2>&1; then echo "apt"
+  if [ "$IS_MACOS" -eq 1 ]; then echo "brew"
+  elif command -v apt-get > /dev/null 2>&1; then echo "apt"
   elif command -v apk    > /dev/null 2>&1; then echo "apk"
   elif command -v dnf    > /dev/null 2>&1; then echo "dnf"
   elif command -v yum    > /dev/null 2>&1; then echo "yum"
   elif command -v pacman > /dev/null 2>&1; then echo "pacman"
   else echo "none"; fi
 }
-
-PKG_MGR="$(detect_pkg_manager)"
-info "Package manager: $PKG_MGR"
-
-if [ "$PKG_MGR" = "none" ]; then
-  error "No supported package manager found."
-  exit 1
-fi
 
 # ─── startup delay ─────────────────────────────────────────────────────
 WAIT_SECS="${BOOTSTRAP_WAIT:-20}"
@@ -109,6 +118,117 @@ if [ "$WAIT_SECS" -gt 0 ]; then
   info "Starting in ${WAIT_SECS}s (use --no-wait to skip)"
   sleep "$WAIT_SECS"
 fi
+
+# ─── homebrew (macOS) ─────────────────────────────────────────────────
+# Homebrew lives in /opt/homebrew on Apple Silicon and /usr/local on Intel;
+# neither is guaranteed to be on PATH in a non-interactive shell. Look in both
+# places so a previous install is detected even when PATH has not been set up.
+brew_path() {
+  if command -v brew > /dev/null 2>&1; then
+    command -v brew
+  elif [ -x /opt/homebrew/bin/brew ]; then
+    echo "/opt/homebrew/bin/brew"
+  elif [ -x /usr/local/bin/brew ]; then
+    echo "/usr/local/bin/brew"
+  fi
+  return 0
+}
+
+# Homebrew needs the Xcode Command Line Tools (git, compilers, make). A brand
+# new Mac does not ship them: /usr/bin/git is only a stub that pops a GUI
+# prompt. `xcode-select --install` opens that same Apple dialog, so trigger it
+# once and wait for it to finish before Homebrew's noninteractive installer
+# checks for the tools and aborts.
+ensure_command_line_tools() {
+  if xcode-select -p > /dev/null 2>&1; then
+    return 0
+  fi
+
+  info "Installing Xcode Command Line Tools (required by Homebrew)"
+  info "A macOS dialog will appear; accept it and wait for the download to finish."
+  xcode-select --install 2> /dev/null || true
+
+  _clt_waited=0
+  _clt_timeout="${CLT_TIMEOUT:-1800}"
+  case "$_clt_timeout" in
+    ''|*[!0-9]*) _clt_timeout=1800 ;;
+  esac
+  while ! xcode-select -p > /dev/null 2>&1; do
+    if [ "$_clt_waited" -ge "$_clt_timeout" ]; then
+      error "Xcode Command Line Tools did not finish within ${_clt_timeout}s"
+      error "Install them with: xcode-select --install"
+      exit 1
+    fi
+    sleep 10
+    _clt_waited=$((_clt_waited + 10))
+    if [ $((_clt_waited % 60)) -eq 0 ]; then
+      info "Still waiting for Xcode Command Line Tools (${_clt_waited}s/${_clt_timeout}s)"
+    fi
+  done
+  info "Xcode Command Line Tools installed"
+}
+
+install_homebrew() {
+  if [ "$IS_MACOS" -ne 1 ]; then
+    return 0
+  fi
+
+  # Homebrew hard-refuses to run as root, and the installer would leave the
+  # whole prefix root-owned. Fail early with an actionable message instead.
+  if [ "$(id -u)" -eq 0 ]; then
+    error "Run bootstrap.sh as your normal user on macOS; Homebrew does not support root."
+    exit 1
+  fi
+
+  brew_bin="$(brew_path)"
+  if [ -n "$brew_bin" ]; then
+    info "Homebrew already installed"
+  else
+    ensure_command_line_tools
+    info "Installing Homebrew"
+    # NONINTERACTIVE=1 skips the "press RETURN" prompts. The installer still
+    # needs sudo for /opt/homebrew (or /usr/local).
+    _hb_installer="$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" ||
+      { error "Could not download the Homebrew installer"; exit 1; }
+    NONINTERACTIVE=1 /bin/bash -c "$_hb_installer" ||
+      { error "Homebrew install failed"; exit 1; }
+    brew_bin="$(brew_path)"
+  fi
+
+  if [ -z "$brew_bin" ]; then
+    error "Homebrew is not available after install; check /opt/homebrew/bin or /usr/local/bin"
+    exit 1
+  fi
+
+  # Put Homebrew's bin/sbin directories on PATH for the rest of this run.
+  # ~/.zshrc does the same for future login shells.
+  eval "$("$brew_bin" shellenv)"
+
+  # Auto-update on every `brew install` makes the bootstrap slow and noisy on
+  # a fresh machine; the index is current enough right after install.
+  export HOMEBREW_NO_AUTO_UPDATE=1
+  export HOMEBREW_NO_ANALYTICS=1
+
+  info "Homebrew prefix: $(brew --prefix)"
+}
+
+install_homebrew
+
+PKG_MGR="$(detect_pkg_manager)"
+info "Package manager: $PKG_MGR"
+
+if [ "$PKG_MGR" = "none" ]; then
+  error "No supported package manager found."
+  exit 1
+fi
+
+# npm's global prefix is user-writable when node comes from Homebrew, so sudo
+# there would only leave root-owned files in the brew prefix. Distro installs
+# put the prefix under /usr, which still needs root.
+case "$PKG_MGR" in
+  brew) NPM_SUDO="" ;;
+  *)    NPM_SUDO="$SUDO" ;;
+esac
 
 # ─── package manager lock retries ─────────────────────────────────────
 # On a freshly booted machine this script is not the only apt/dpkg client:
@@ -197,6 +317,7 @@ pkg_refresh() {
   case "$PKG_MGR" in
     apt)  pkg_retry $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq ;;
     apk)  pkg_retry $SUDO apk update -qq ;;
+    brew) : ;; # HOMEBREW_NO_AUTO_UPDATE keeps installs from waiting on this
     *)    : ;;
   esac
 }
@@ -228,6 +349,7 @@ install_pkgs() {
     dnf)    pkg_retry $SUDO dnf install -y $missing ;;
     yum)    pkg_retry $SUDO yum install -y $missing ;;
     pacman) pkg_retry $SUDO pacman -Sy --noconfirm --needed $missing ;;
+    brew)   pkg_retry brew install $missing ;;
   esac
 }
 
@@ -252,11 +374,15 @@ install_pkgs tmux
 # pins it in that project's own tooling instead.
 case "$PKG_MGR" in
   apt|apk) install_pkgs node::nodejs npm ;;
-  *)        install_pkgs node npm ;;
+  brew)    install_pkgs node ;; # npm ships with the node formula
+  *)       install_pkgs node npm ;;
 esac
 
 # xclip/xsel are for X11 clipboards. Harmless no-ops headless, so don't fail.
-install_pkgs xclip || warn "xclip unavailable; clipboard integration off"
+# Neither exists in Homebrew, and macOS has no X11 clipboard here.
+if [ "$IS_MACOS" -eq 0 ]; then
+  install_pkgs xclip || warn "xclip unavailable; clipboard integration off"
+fi
 
 # ─── github release helper ────────────────────────────────────────────
 latest_version() {
@@ -293,6 +419,15 @@ version_gt() {
 # LTS images is frequently too old for the kickstart config (e.g. newer
 # autocmd events and APIs). No package-manager fallback on purpose.
 install_neovim_github() {
+  # Homebrew already tracks the stable release (and updates it), so on macOS
+  # let brew own the install instead of writing a second copy to /opt.
+  if [ "$PKG_MGR" = "brew" ]; then
+    install_pkgs nvim::neovim
+    command -v nvim > /dev/null 2>&1 || { error "Failed to install neovim via Homebrew"; return 1; }
+    nvim --version | head -n 1
+    return 0
+  fi
+
   version="${NEOVIM_VERSION:-$(latest_version neovim/neovim)}"
   version="${version#v}"
 
@@ -358,6 +493,11 @@ install_lazygit() {
     return 0
   fi
 
+  if [ "$PKG_MGR" = "brew" ]; then
+    install_pkgs lazygit
+    return 0
+  fi
+
   # lazygit names its assets with the *uname* spelling, not the Debian one.
   case "$ARCH" in
     x86_64) lg_arch="x86_64" ;;
@@ -387,6 +527,18 @@ install_lazygit() {
 install_herdr() {
   if command -v herdr > /dev/null 2>&1; then
     info "herdr already installed"
+    return 0
+  fi
+
+  # herdr is in Homebrew, and its official installer supports both Linux and
+  # macOS. Prefer brew on macOS; fall back to the installer (which resolves the
+  # right platform binary) if the formula is unavailable.
+  if [ "$PKG_MGR" = "brew" ]; then
+    if ! install_pkgs herdr || ! command -v herdr > /dev/null 2>&1; then
+      warn "Homebrew install of herdr failed; trying the upstream installer"
+      curl -fsSL https://herdr.dev/install.sh | sh ||
+        warn "herdr install failed; install it from https://herdr.dev"
+    fi
     return 0
   fi
 
@@ -422,6 +574,11 @@ install_herdr() {
 install_tree_sitter() {
   if command -v tree-sitter > /dev/null 2>&1; then
     info "tree-sitter already present"
+    return 0
+  fi
+
+  if [ "$PKG_MGR" = "brew" ]; then
+    install_pkgs tree-sitter
     return 0
   fi
 
@@ -510,6 +667,11 @@ install_gh() {
     return 0
   fi
 
+  if [ "$PKG_MGR" = "brew" ]; then
+    install_pkgs gh
+    return 0
+  fi
+
   case "$PKG_MGR" in
     apt)
       info "Installing GitHub CLI via apt"
@@ -546,6 +708,15 @@ install_gh() {
 install_op() {
   if command -v op > /dev/null 2>&1; then
     info "1password cli already installed"
+    return 0
+  fi
+
+  if [ "$PKG_MGR" = "brew" ]; then
+    # 1password-cli is a cask (it installs the signed `op` binary), not a
+    # formula, so install_pkgs cannot be used here.
+    info "Installing 1Password CLI (brew cask)"
+    pkg_retry brew install --cask 1password-cli ||
+      warn "1Password CLI install failed"
     return 0
   fi
 
@@ -633,8 +804,8 @@ install_tldr() {
 
   info "Installing tldr (npm)"
   # Distro node installs npm's global prefix under system paths, so this
-  # needs root; $SUDO is empty when already root.
-  $SUDO npm install -g tldr ||
+  # needs root; NPM_SUDO is empty when node came from Homebrew.
+  $NPM_SUDO npm install -g tldr ||
     warn "tldr install failed; pages client will be missing"
 }
 
@@ -653,8 +824,8 @@ install_bruno() {
   fi
 
   info "Installing bruno cli (npm)"
-  # Same as tldr: distro node puts the global prefix under system paths.
-  $SUDO npm install -g @usebruno/cli ||
+  # Same as tldr: NPM_SUDO is empty when node came from Homebrew.
+  $NPM_SUDO npm install -g @usebruno/cli ||
     warn "bruno cli install failed; the bru command will be missing"
 }
 
@@ -707,7 +878,11 @@ install_awscli() {
       ;;
   esac
 
-  command -v aws > /dev/null 2>&1 && aws --version
+  # `if` rather than `cmd && aws --version`: a missing aws at the end of the
+  # function would return non-zero and, under `set -e`, abort the bootstrap.
+  if command -v aws > /dev/null 2>&1; then
+    aws --version
+  fi
 }
 
 # ─── mise + bun ───────────────────────────────────────────────────────
@@ -771,6 +946,12 @@ install_docker() {
     info "docker already available"
     return 0
   fi
+  # get.docker.com installs the Linux engine, which does not exist on macOS.
+  # Docker Desktop is a separate (interactive) install; leave it to the user.
+  if [ "$IS_MACOS" -eq 1 ]; then
+    skip "Docker Desktop not installed on macOS; install it from docker.com if needed"
+    return 0
+  fi
   if in_container; then
     skip "docker inside a container; expected via bind-mounted socket + remoteUser"
     return 0
@@ -779,6 +960,41 @@ install_docker() {
   curl -fsSL https://get.docker.com | sh
   # No usermod: under remoteUser docker access comes from the socket's group
   # already being present in the image.
+}
+
+# ─── macOS apps (brew casks) ──────────────────────────────────────────
+# GUI apps live in /Applications, not on PATH, so the presence check is a
+# bundle-directory test. Re-running the bootstrap must not reinstall them.
+install_cask() {
+  _cask_name="$1"
+  _cask_bundle="$2"
+  if [ -d "/Applications/$_cask_bundle" ]; then
+    info "$_cask_name already installed"
+    return 0
+  fi
+  info "Installing $_cask_name (brew cask)"
+  pkg_retry brew install --cask "$_cask_name" ||
+    warn "$_cask_name install failed; install it manually if needed"
+}
+
+install_macos_apps() {
+  if [ "$IS_MACOS" -ne 1 ]; then
+    return 0
+  fi
+
+  install_cask ghostty "Ghostty.app"
+  install_cask rectangle "Rectangle.app"
+
+  # Claude Code is a cask whose only artifact is the `claude` binary in the
+  # Homebrew prefix. A native-installer copy in ~/.local/bin also satisfies
+  # this, so an existing install is never duplicated.
+  if command -v claude > /dev/null 2>&1; then
+    info "claude code cli already installed"
+  else
+    info "Installing claude code cli (brew cask)"
+    pkg_retry brew install --cask claude-code ||
+      warn "claude code cli install failed; install it manually if needed"
+  fi
 }
 
 # ─── oh-my-zsh ────────────────────────────────────────────────────────
@@ -1085,6 +1301,7 @@ install_login_shell() {
 
 # ─── run ──────────────────────────────────────────────────────────────
 install_login_shell
+install_macos_apps
 install_lazygit
 install_herdr
 install_tree_sitter
