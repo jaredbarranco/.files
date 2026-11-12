@@ -5,3 +5,8 @@
 # skips when this path is a stow symlink, so keep it untracked: a vendored copy
 # here would shadow the real config and get committed as dotfiles.
 .config/nvim/
+/.config/herdr/.plugins.lock
+/.config/herdr/herdr-client.log
+/.config/herdr/herdr-server.log
+/.config/herdr/session-snapshots
+/.config/herdr/session.json

@@ -1,3 +1,4 @@
 theme = Atom One Dark
 mouse-hide-while-typing = true
 unfocused-split-opacity = .25
+shell-integration-features = ssh-terminfo,ssh-env
